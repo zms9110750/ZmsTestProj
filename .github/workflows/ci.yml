@@ -305,6 +305,19 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Show trigger info
+        shell: pwsh
+        run: |
+          Write-Host "=== ¥•∑¢–≈œ¢ ==="
+          Write-Host "event_name      : ${{ github.event_name }}"
+          Write-Host "ref             : ${{ github.ref }}"
+          Write-Host "ref_name        : ${{ github.ref_name }}"
+          Write-Host "actor           : ${{ github.actor }}"
+          Write-Host "sha             : ${{ github.sha }}"
+          Write-Host "base_ref        : ${{ github.base_ref }}"
+          Write-Host "head_ref        : ${{ github.head_ref }}"
+          Write-Host "================="
+
       - name: Resolve release tag
         id: rtag
         shell: pwsh
