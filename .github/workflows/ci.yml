@@ -341,6 +341,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Show trigger info
         shell: pwsh
         run: |
