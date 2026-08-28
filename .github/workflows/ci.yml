@@ -315,6 +315,7 @@ jobs:
           Write-Host "release tag: $tag"
 
       - name: Skip if already published
+        id: skip
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -327,14 +328,18 @@ jobs:
             $obj = $info | ConvertFrom-Json
             if (-not $obj.isDraft) {
               Write-Host "tag $env:TAG 已有已发布 Release，跳过（防重复发版）"
+              "skipped=true" >> $env:GITHUB_OUTPUT
               exit 0
             }
           }
           Write-Host "tag $env:TAG 无已发布 Release，继续"
+          "skipped=false" >> $env:GITHUB_OUTPUT
 
       - uses: actions/download-artifact@v4
+        if: steps.skip.outputs.skipped != 'true'
 
       - name: Collect all artifacts
+        if: steps.skip.outputs.skipped != 'true'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path publish -Force | Out-Null
@@ -342,6 +347,7 @@ jobs:
           Get-ChildItem -Recurse -Filter "*.nupkg" | Move-Item -Destination publish/ -Force
 
       - uses: softprops/action-gh-release@v2
+        if: steps.skip.outputs.skipped != 'true'
         with:
           tag_name: ${{ steps.rtag.outputs.tag }}
           files: "publish/*"
