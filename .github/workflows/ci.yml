@@ -7,6 +7,8 @@ on:
   pull_request:
     branches: [ "main", "master" ]
     types: [ "opened", "synchronize", "reopened", "closed" ]
+  issue_comment:
+    types: [ "created" ]
   push:
     tags: [ "v*" ]
   workflow_dispatch:
@@ -514,4 +516,129 @@ jobs:
             ].join('\n');
             await github.rest.issues.createComment({
               owner: repo.owner, repo: repo.repo, issue_number: pr, body,
+            });
+
+  # 重新打包：PR 评论 @github-actions[bot] pack <sha7>
+  repack:
+    if: |
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '@github-actions[bot] pack')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Parse pack command
+        id: parse
+        shell: pwsh
+        env:
+          BODY: ${{ github.event.comment.body }}
+          PR_NUM: ${{ github.event.issue.number }}
+        run: |
+          # 提取 @github-actions[bot] pack <sha7>，校验 sha7 是本 PR head 提交
+          $m = [regex]::Match($env:BODY, '@github-actions\[bot\]\s+pack\s+([0-9a-f]{7})')
+          if (-not $m.Success) {
+            Write-Host "未匹配到 pack 命令"
+            "valid=false" >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+          $sha7 = $m.Groups[1].Value
+          "valid=true" >> $env:GITHUB_OUTPUT
+          "sha7=$sha7" >> $env:GITHUB_OUTPUT
+          "pr=$env:PR_NUM" >> $env:GITHUB_OUTPUT
+
+      - name: Reply invalid command
+        if: steps.parse.outputs.valid != 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { repo, issue } = context;
+            await github.rest.issues.createComment({
+              owner: repo.owner, repo: repo.repo, issue_number: issue.number,
+              body: '❌ 未识别到打包命令。格式：`@github-actions[bot] pack <sha7>`',
+            });
+
+      - name: Determine .NET version
+        if: steps.parse.outputs.valid == 'true'
+        id: dotver
+        shell: pwsh
+        run: |
+          $year = [System.DateTime]::UtcNow.Year
+          $ver = "$($year - 2016).0.x"
+          "version=$ver" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/checkout@v4
+        if: steps.parse.outputs.valid == 'true'
+        with:
+          ref: refs/pull/${{ steps.parse.outputs.pr }}/head
+
+      - uses: actions/setup-dotnet@v4
+        if: steps.parse.outputs.valid == 'true'
+        with:
+          dotnet-version: ${{ steps.dotver.outputs.version }}
+          dotnet-quality: ga
+
+      - name: Pack requested sha
+        if: steps.parse.outputs.valid == 'true'
+        shell: pwsh
+        env:
+          PR_NUM: ${{ steps.parse.outputs.pr }}
+          SHA7: ${{ steps.parse.outputs.sha7 }}
+        run: |
+          $ver = "0.0.0-pr.$env:PR_NUM.$env:SHA7"
+          New-Item -ItemType Directory -Path publish -Force | Out-Null
+          # 与 pr-preview 一致：打包所有库项目
+          $slnx = Get-ChildItem -Recurse -Filter "*.slnx" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($slnx) {
+            [xml]$doc = Get-Content $slnx.FullName -Raw
+            $projFiles = @($doc.SelectNodes('//Project') | ForEach-Object { Join-Path $slnx.DirectoryName $_.Path })
+          } else {
+            $projFiles = @(Get-ChildItem -Recurse -Filter "*.csproj" | ForEach-Object { $_.FullName })
+          }
+          foreach ($p in $projFiles) {
+            $content = Get-Content $p -Raw
+            if ($content -match '(Microsoft\.NET\.Test\.Sdk|MSTest|NUnit|xunit|TestingPlatformDotnetTestSupport)') { continue }
+            if ($content -match '<OutputType>(.*?)</OutputType>') {
+              $outType = $Matches[1]
+            } else { $outType = "Library" }
+            if ($outType -eq "Exe" -or $outType -eq "WinExe") { continue }  # 只打包库
+            Write-Host "Packing: $(Split-Path $p -Leaf) v$ver"
+            dotnet pack $p -c Release -o publish/nupkg -p:Version=$ver
+            if ($LASTEXITCODE -ne 0) { throw "exit $LASTEXITCODE" }
+          }
+          "ver=$ver" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/upload-artifact@v4
+        if: steps.parse.outputs.valid == 'true'
+        with:
+          name: nupkg-pr-${{ steps.parse.outputs.pr }}-${{ steps.parse.outputs.sha7 }}
+          path: publish/nupkg/*
+          if-no-files-found: error
+
+      - name: Reply with download link
+        if: steps.parse.outputs.valid == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { repo, issue } = context;
+            const runId = context.runId;
+            const pr = context.payload.issue.number;
+            const sha7 = context.payload.comment.body.match(/pack\s+([0-9a-f]{7})/)[1];
+            const arts = await github.rest.actions.listWorkflowRunArtifacts({
+              owner: repo.owner, repo: repo.repo, run_id: runId,
+            });
+            const links = arts.data.artifacts.map(a =>
+              `- [${a.name}](https://github.com/${repo.owner}/${repo.repo}/actions/runs/${runId}/artifacts/${a.id}) (${(a.size_in_bytes/1024).toFixed(1)} KB)`
+            ).join('\n');
+            await github.rest.issues.createComment({
+              owner: repo.owner, repo: repo.repo, issue_number: pr,
+              body: [
+                `## 🔄 已按请求重新打包`,
+                ``,
+                `- 版本：\`0.0.0-pr.${pr}.${sha7}\``,
+                `- 下载：`,
+                links,
+              ].join('\n'),
             });
