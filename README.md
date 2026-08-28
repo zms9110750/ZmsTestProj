@@ -15,6 +15,8 @@
 `.github/workflows/ci.yml` 包含了完整的 CI/CD：
 
 - **PR 到 main/master** — 自动 `dotnet restore` → `build` → `test`，测试通过才能合并
+- **PR 打开/更新** — 自动打包预览包（`0.0.0-pr.{N}.{sha7}`），机器人评论附下载链接，可评论 `@github-actions[bot] pack {sha7}` 重新打包
+- **PR 合并 + 里程碑 `vX.Y.Z`** — 自动发版 `vX.Y.Z-build.{N}` 草稿 Release
 - **推送 `v*` 标签** — 自动打包发版（同版本已有 Release 时自动跳过，防重复/覆盖）
 - **网页按钮（workflow_dispatch）** — 手动填版本号打包发版，草稿 Release 需手动 Publish
 
