@@ -24,6 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.bver.outputs.version }}
+      should_release: ${{ steps.relflag.outputs.should_release }}
       exe_json: ${{ steps.classify.outputs.exe_json }}
       lib_json: ${{ steps.classify.outputs.lib_json }}
       tfm_json: ${{ steps.classify.outputs.tfm_json }}
@@ -66,6 +67,25 @@ jobs:
           }
           "version=$ver" >> $env:GITHUB_OUTPUT
           Write-Host "build version: $ver"
+
+      - name: Compute release flag
+        id: relflag
+        shell: pwsh
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_MERGED: ${{ github.event.pull_request.merged }}
+        run: |
+          # 是否发版：tag push / 网页按钮 / PR 合并（里程碑）都发；普通 PR 验证不发
+          $rel = "false"
+          if ($env:EVENT_NAME -eq "push" -and $env:GITHUB_REF -like "refs/tags/v*") {
+            $rel = "true"
+          } elseif ($env:EVENT_NAME -eq "workflow_dispatch") {
+            $rel = "true"
+          } elseif ($env:EVENT_NAME -eq "pull_request" -and $env:PR_MERGED -eq "true") {
+            $rel = "true"
+          }
+          "should_release=$rel" >> $env:GITHUB_OUTPUT
+          Write-Host "should_release: $rel"
 
       - name: Classify projects
         id: classify
@@ -160,7 +180,7 @@ jobs:
         shell: pwsh
 
   publish-self-contained:
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    if: needs.build.outputs.should_release == 'true'
     needs: build
     strategy:
       fail-fast: false
@@ -221,7 +241,7 @@ jobs:
           path: publish/*.zip
 
   publish-fdd:
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    if: needs.build.outputs.should_release == 'true'
     needs: build
     strategy:
       matrix:
@@ -271,7 +291,7 @@ jobs:
           path: publish/*.zip
 
   pack:
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    if: needs.build.outputs.should_release == 'true'
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -313,10 +333,7 @@ jobs:
           path: publish/nupkg/*
 
   release:
-    if: |
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true)
+    if: needs.build.outputs.should_release == 'true'
     needs: [build, test, publish-self-contained, publish-fdd, pack]
     runs-on: ubuntu-latest
     permissions:
