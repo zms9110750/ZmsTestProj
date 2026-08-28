@@ -1,3 +1,6 @@
+# CI workflow — 打包 + 发版
+# 触发：PR（验证）/ push tag v*（发版）/ 网页按钮（发版）
+# 发版产物：草稿 Release（需手动 Publish 才公开）
 name: CI
 
 on:
@@ -19,6 +22,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     outputs:
+      version: ${{ steps.bver.outputs.version }}
       exe_json: ${{ steps.classify.outputs.exe_json }}
       lib_json: ${{ steps.classify.outputs.lib_json }}
       tfm_json: ${{ steps.classify.outputs.tfm_json }}
@@ -39,6 +43,28 @@ jobs:
 
       - run: dotnet restore
       - run: dotnet build --no-restore -c Release
+
+      - name: Resolve build version
+        id: bver
+        shell: pwsh
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          $input = "${{ github.event.inputs.version }}".Trim()
+          $ver = "0.0.0"
+          if ($input -ne "") {
+            # 网页按钮填了版本 → 用它（去掉 v 前缀，纯版本号）
+            $ver = $input.TrimStart('v')
+          } elseif ($env:EVENT_NAME -eq "workflow_dispatch") {
+            # 网页按钮没填 → 从 Directory.Build.props 读版本
+            $props = Get-Content Directory.Build.props -Raw
+            if ($props -match '<Version>([^<]+)</Version>') { $ver = $Matches[1] }
+          } elseif ($env:EVENT_NAME -eq "push") {
+            # tag 触发 → ref_name 是 v1.2.3，去 v 前缀
+            $ver = "${{ github.ref_name }}".TrimStart('v')
+          }
+          "version=$ver" >> $env:GITHUB_OUTPUT
+          Write-Host "build version: $ver"
 
       - name: Classify projects
         id: classify
@@ -160,7 +186,7 @@ jobs:
 
           foreach ($exe in $exes) {
             $best = Get-Highest $exe.Frameworks
-            if (-not $best) { Write-Host "跳过 $($exe.Name): 无可用框架"; continue }
+            if (-not $best) { Write-Host "跳过 $($exe.Name): 无可构建框架"; continue }
             $fw = $exe.RawFrameworks | Where-Object { $_ -match "net$($best.Major)[.$]$($best.Minor)" } | Select-Object -First 1
             if (-not $fw) { $fw = $exe.RawFrameworks | Where-Object { $_ -match "net$($best.Major)[.$]" } | Select-Object -First 1 }
             if (-not $fw) { $fw = $exe.RawFrameworks[0] }
@@ -213,7 +239,7 @@ jobs:
           $exes = $env:EXE_JSON | ConvertFrom-Json
           $fw = '${{ matrix.fw }}'
           $matched = $exes | Where-Object { $_.RawFrameworks -contains $fw }
-          if (-not $matched) { Write-Host "无项目支持 $fw"; exit 0 }
+          if (-not $matched) { Write-Host "项目不支持 $fw"; exit 0 }
           $projNames = ($matched | ForEach-Object { $_.Name }) -join "+"
           $outDir = "publish/tmp/fdd-$projNames-$fw"
           New-Item -ItemType Directory -Path $outDir -Force | Out-Null
@@ -255,12 +281,13 @@ jobs:
         shell: pwsh
         env:
           LIB_JSON: ${{ needs.build.outputs.lib_json }}
+          PACK_VERSION: ${{ needs.build.outputs.version }}
         run: |
           $paths = $env:LIB_JSON | ConvertFrom-Json
           foreach ($p in $paths) {
-            Write-Host "Packing: $(Split-Path $p -Leaf)"
+            Write-Host "Packing: $(Split-Path $p -Leaf) v$env:PACK_VERSION"
             try {
-              dotnet pack $p -c Release -o publish/nupkg
+              dotnet pack $p -c Release -o publish/nupkg -p:Version=$env:PACK_VERSION
               if ($LASTEXITCODE -ne 0) { throw "exit $LASTEXITCODE" }
             } catch { Write-Host "跳过 $(Split-Path $p -Leaf) (不兼容)" }
           }
@@ -273,11 +300,38 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-    needs: [test, publish-self-contained, publish-fdd, pack]
+    needs: [build, test, publish-self-contained, publish-fdd, pack]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - name: Resolve release tag
+        id: rtag
+        shell: pwsh
+        run: |
+          $ver = "${{ needs.build.outputs.version }}"
+          $tag = "v$ver"
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          Write-Host "release tag: $tag"
+
+      - name: Skip if already published
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.rtag.outputs.tag }}
+        run: |
+          # 若该 tag 已有【非草稿】Release，说明是发布后触发的重跑 → 跳过，避免死循环
+          gh release view "$env:TAG" --repo ${{ github.repository }} --json isDraft 2>$null | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+            $info = gh release view "$env:TAG" --repo ${{ github.repository }} --json isDraft
+            $obj = $info | ConvertFrom-Json
+            if (-not $obj.isDraft) {
+              Write-Host "tag $env:TAG 已有已发布 Release，跳过（防重复发版）"
+              exit 0
+            }
+          }
+          Write-Host "tag $env:TAG 无已发布 Release，继续"
+
       - uses: actions/download-artifact@v4
 
       - name: Collect all artifacts
@@ -287,43 +341,9 @@ jobs:
           Get-ChildItem -Recurse -Filter "*.zip" | Move-Item -Destination publish/ -Force
           Get-ChildItem -Recurse -Filter "*.nupkg" | Move-Item -Destination publish/ -Force
 
-      - name: Resolve version
-        id: ver
-        shell: pwsh
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-        run: |
-          $input = "${{ github.event.inputs.version }}".Trim()
-          if ($input -ne "") {
-            # 网页按钮填了版本 → 用它（补 v 前缀）
-            $tag = $input
-            if (-not $tag.StartsWith('v')) { $tag = "v$tag" }
-          } elseif ($env:EVENT_NAME -eq "workflow_dispatch") {
-            # 网页按钮没填 → 从 Directory.Build.props 读版本
-            $props = Get-Content Directory.Build.props -Raw
-            if ($props -match '<Version>([^<]+)</Version>') {
-              $tag = "v$($Matches[1])"
-            } else {
-              throw "未找到 Directory.Build.props 中的 <Version>"
-            }
-          } else {
-            # tag 触发 → ref_name 即 tag
-            $tag = "${{ github.ref_name }}"
-          }
-          "tag=$tag" >> $env:GITHUB_OUTPUT
-
-      - name: Delete existing release
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $tag = "${{ steps.ver.outputs.tag }}"
-          gh release delete $tag --cleanup-tag --yes --repo ${{ github.repository }}
-        continue-on-error: true
-
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.ver.outputs.tag }}
+          tag_name: ${{ steps.rtag.outputs.tag }}
           files: "publish/*"
           draft: true
           generate_release_notes: true
