@@ -138,3 +138,7 @@ GitHub Actions CI 在 `v*` 标签推送时自动构建并发布以下产物：
 - **自包含发布的目标框架**：CI 的 `Get-Highest` 函数自动选择项目中的最高 TFM（如 net6.0;net8.0;net9.0 选 net9.0）。如需发布特定 TFM 的自包含包，请调整 `TargetFrameworks` 或手动构建
 - **Linux x86-32**：.NET 6 起已移除对 32 位 Linux 的官方支持，本 CI 不提供 `linux-x86` RID
 - **预览版目标框架**：CI 默认安装当年 GA 版的 .NET SDK。若你的项目使用了尚未正式发布的 TFM（如 net11.0 在 2026 年），会导致编译/打包失败。请等待 SDK GA 或手动指定 `dotnet-version`
+
+> CI 里程碑合并发版验证：本 PR 带 v0.3.0 里程碑，合并后应自动创建 v0.3.0-build.0 草稿 Release。
+
+> 测试：给 PR #3 分支新增提交，触发同步事件，验证新评论是否带可点击 artifact 链接。
