@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Description>Auto-generated test project</Description>
+    <DefineConstants>$(DefineConstants);IS_TEST</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
+    <PackageReference Include="xunit.v3" Version="3.2.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(IsLib)' == 'true'">
+    <ProjectReference Include="..\..\src\ZmsTestProj\ZmsTestProj.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(IsLib)' != 'true' And '$(IsCli)' == 'true'">
+    <ProjectReference Include="..\..\src\ZmsTestProj.Cli\ZmsTestProj.Cli.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(IsLib)' != 'true' And '$(IsGui)' == 'true'">
+    <ProjectReference Include="..\..\src\ZmsTestProj.GUI\ZmsTestProj.GUI.csproj" />
+  </ItemGroup>
+
+</Project>

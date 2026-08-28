@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ZmsTestProj/ZmsTestProj.csproj" />
+  </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/ZmsTestProj.Cli/ZmsTestProj.Cli.csproj" />
+  </Folder>
+  <Folder Name="/test/">
+    <Project Path="test/ZmsTestProj.Test/ZmsTestProj.Test.csproj" />
+  </Folder>
+</Solution>
