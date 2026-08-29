@@ -23,6 +23,7 @@ env:
 
 jobs:
   build:
+    if: github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.bver.outputs.version }}
@@ -161,6 +162,7 @@ jobs:
           "tfm_json<<$delim" >> $env:GITHUB_OUTPUT; $tfmJson >> $env:GITHUB_OUTPUT; $delim >> $env:GITHUB_OUTPUT
 
   test:
+    if: github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
     steps:
       - name: Determine .NET version
@@ -367,7 +369,8 @@ jobs:
           MILESTONE: ${{ github.event.pull_request.milestone.title }}
         run: |
           if ($env:EVENT_NAME -eq "pull_request" -and $env:PR_MERGED -eq "true") {
-            # PR 合并发版：里程碑 vX.Y.Z → vX.Y.Z-build.{max+1}
+            # PR 合并发版：里程碑 vX.Y.Z → vX.Y.Z-build.{GITHUB_RUN_NUMBER}
+            # 用 GITHUB_RUN_NUMBER（仓库全局递增）避免并发 PR 合并时 build 号竞态
             $milestone = $env:MILESTONE.Trim()
             if ($milestone -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') {
               Write-Host "里程碑必须是 vX.Y.Z（如 v0.2.0），当前：'$milestone'，跳过发版"
@@ -375,15 +378,7 @@ jobs:
               exit 0
             }
             $ver = $milestone.TrimStart('v')
-            $builds = @(git tag -l "v${ver}-build.*")
-            $max = -1
-            foreach ($b in $builds) {
-              if ($b -match "^v${ver}-build\.(\d+)$") {
-                $n = [int]$Matches[1]
-                if ($n -gt $max) { $max = $n }
-              }
-            }
-            $next = $max + 1
+            $next = $env:GITHUB_RUN_NUMBER
             $full = "$ver-build.$next"
             $tag = "v$full"
             Write-Host "里程碑 $milestone → $tag"
@@ -510,13 +505,14 @@ jobs:
             ).join('\n') || '（无 artifact）';
 
             const body = [
-              `## 📦 PR 预览包已生成`,
+              `## 📦 PR 预览包已生成 / PR Preview package ready`,
               ``,
-              `- 版本：\`0.0.0-pr.${pr}.${sha7}\``,
-              `- 下载：`,
+              `- 版本 / Version：\`0.0.0-pr.${pr}.${sha7}\``,
+              `- 下载 / Download：`,
               links,
               ``,
               `> 需要重新打包？评论回复 \`@github-actions[bot] pack ${sha7}\``,
+              `> Need to rebuild? Reply with \`@github-actions[bot] pack ${sha7}\``,
             ].join('\n');
             await github.rest.issues.createComment({
               owner: repo.owner, repo: repo.repo, issue_number: pr, body,
@@ -589,7 +585,7 @@ jobs:
             const { repo, issue } = context;
             await github.rest.issues.createComment({
               owner: repo.owner, repo: repo.repo, issue_number: issue.number,
-              body: `❌ \`${process.env.SHA7}\` 不是本 PR 的提交。请从本 PR 的 Commits 列表复制 sha 前缀。`,
+              body: `❌ \`${process.env.SHA7}\` 不是本 PR 的提交 / is not a commit in this PR. 请从本 PR 的 Commits 列表复制 sha 前缀。Please copy the sha prefix from this PR's Commits tab.`,
             });
         env:
           SHA7: ${{ steps.parse.outputs.sha7 }}
@@ -669,10 +665,10 @@ jobs:
             await github.rest.issues.createComment({
               owner: repo.owner, repo: repo.repo, issue_number: pr,
               body: [
-                `## 🔄 已按请求重新打包`,
+                `## 🔄 已按请求重新打包 / Rebuilt on request`,
                 ``,
-                `- 版本：\`0.0.0-pr.${pr}.${sha7}\``,
-                `- 下载：`,
+                `- 版本 / Version：\`0.0.0-pr.${pr}.${sha7}\``,
+                `- 下载 / Download：`,
                 links,
               ].join('\n'),
             });
