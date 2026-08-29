@@ -339,10 +339,6 @@ jobs:
   release:
     if: needs.build.outputs.should_release == 'true'
     needs: [build, test, publish-self-contained, publish-fdd, pack]
-    # 同里程碑/同 tag 的发版串行化，防止并发合并时 build 号竞态（max+1 撞号）
-    concurrency:
-      group: release-${{ github.event.pull_request.milestone.title || 'manual' }}
-      cancel-in-progress: false
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -373,8 +369,9 @@ jobs:
           MILESTONE: ${{ github.event.pull_request.milestone.title }}
         run: |
           if ($env:EVENT_NAME -eq "pull_request" -and $env:PR_MERGED -eq "true") {
-            # PR 合并发版：里程碑 vX.Y.Z → vX.Y.Z-build.{max+1}（该里程碑内从 0 计数）
-            # 并发撞号由 release job 的 concurrency 串行化兜底：后一个 run 数 tag 时能看到前一个建的 tag
+            # PR 合并发版：里程碑 vX.Y.Z → 抢占唯一 tag vX.Y.Z-build.{N}
+            # 用 git push 做原子裁决（CAS）：同号只有一个 run 能 push 成功，输家 +1 重试
+            # GITHUB_TOKEN push 的 tag 不会触发 push:tags CI（GitHub 防递归），无死循环
             $milestone = $env:MILESTONE.Trim()
             if ($milestone -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') {
               Write-Host "里程碑必须是 vX.Y.Z（如 v0.2.0），当前：'$milestone'，跳过发版"
@@ -382,18 +379,18 @@ jobs:
               exit 0
             }
             $ver = $milestone.TrimStart('v')
-            $builds = @(git tag -l "v${ver}-build.*")
-            $max = -1
-            foreach ($b in $builds) {
-              if ($b -match "^v${ver}-build\.(\d+)$") {
-                $n = [int]$Matches[1]
-                if ($n -gt $max) { $max = $n }
-              }
+            $n = 0
+            $pushed = $false
+            while ($n -lt 100) {
+              $tag = "v${ver}-build.$n"
+              git tag -d $tag 2>$null | Out-Null
+              git tag $tag
+              git push origin $tag 2>&1 | Out-Null
+              if ($LASTEXITCODE -eq 0) { $pushed = $true; break }
+              $n++
             }
-            $next = $max + 1
-            $full = "$ver-build.$next"
-            $tag = "v$full"
-            Write-Host "里程碑 $milestone → $tag"
+            if (-not $pushed) { throw "无法获取唯一 tag（尝试 100 个 build 号均被占用）" }
+            Write-Host "抢占成功：里程碑 $milestone → $tag"
           } else {
             # tag push / dispatch：直接 v{版本}
             $ver = "${{ needs.build.outputs.version }}"
