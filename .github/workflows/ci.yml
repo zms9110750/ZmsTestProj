@@ -346,6 +346,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # PR 合并发版时 tag 要打在真实合并提交上（squash/merge/rebase 都正确），
+          # 避免打到 GitHub 预生成的 refs/pull/N/merge 临时提交（孤儿 tag）
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
 
       - name: Show trigger info
         shell: pwsh
